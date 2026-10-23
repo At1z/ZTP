@@ -10,10 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"lab1/internal/config"
 	"lab1/internal/db"
+	"lab1/internal/handler"
+	"lab1/internal/repository"
+	"lab1/internal/service"
 )
 
 func main() {
@@ -28,31 +29,36 @@ func main() {
 	}
 	defer pool.Close()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(pool))
+	productRepo := repository.NewProductRepository(pool)
+	phraseRepo := repository.NewBannedPhraseRepository(pool)
 
-	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
+	router := handler.NewRouter(
+		service.NewProductService(productRepo, phraseRepo),
+		service.NewBannedPhraseService(phraseRepo),
+		pool,
+	)
+	srv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
+	// ListenAndServe returns as soon as Shutdown is called, so main must wait
+	// for shutdownDone or in-flight requests would be cut off by pool.Close().
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}()
 
 	log.Printf("listening on %s", cfg.HTTPAddr)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server: %v", err)
 	}
-}
-
-func healthHandler(pool *pgxpool.Pool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := pool.Ping(r.Context()); err != nil {
-			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}
+	<-shutdownDone
 }
