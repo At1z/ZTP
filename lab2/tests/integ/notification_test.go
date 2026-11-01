@@ -318,3 +318,15 @@ func TestHighPriorityOvertakesLowPriority(t *testing.T) {
 		}
 	}
 }
+
+func TestSwaggerDocs(t *testing.T) {
+	for path, want := range map[string]string{
+		"/openapi.yaml": "openapi: 3.0.3",
+		"/docs":         "swagger-ui",
+	} {
+		res := send(t, http.MethodGet, path, nil).expectStatus(t, http.StatusOK)
+		if !strings.Contains(string(res.body), want) {
+			t.Errorf("%s does not contain %q", path, want)
+		}
+	}
+}

@@ -15,6 +15,8 @@ func NewRouter(notifications NotificationService, db, broker Pinger) http.Handle
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(db, broker))
+	mux.HandleFunc("GET /openapi.yaml", openAPIHandler)
+	mux.HandleFunc("GET /docs", docsHandler)
 
 	mux.HandleFunc("POST "+APIPrefix+"/notifications", nh.create)
 	mux.HandleFunc("GET "+APIPrefix+"/notifications", nh.list)

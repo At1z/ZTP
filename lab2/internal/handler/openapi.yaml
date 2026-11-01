@@ -1,0 +1,225 @@
+openapi: 3.0.3
+info:
+  title: Notification system API
+  version: 1.0.0
+  description: |
+    Creates notifications and plans their simulated delivery. A scheduler moves
+    due notifications to a RabbitMQ queue per channel; each channel is served by
+    its own worker instance. A failed delivery is retried, the notification
+    fails after 3 attempts.
+
+    Delivery happens only between 08:00 and 22:00 in the recipient's time zone;
+    otherwise `scheduled_at` moves to the next 08:00 local time.
+servers:
+  - url: /
+tags:
+  - name: notifications
+  - name: system
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Check the database and the broker
+      responses:
+        '200':
+          description: Both are reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: ok}
+        '503':
+          description: The database or the broker is unavailable (plain text)
+          content:
+            text/plain:
+              schema: {type: string, example: database unavailable}
+  /api/v1/notifications:
+    post:
+      tags: [notifications]
+      summary: Create a notification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NotificationInput'}
+            examples:
+              email:
+                summary: Email sent as soon as possible
+                value:
+                  channel: email
+                  content: Your order has shipped
+                  recipient: ann@example.com
+                  timezone: Europe/Warsaw
+              scheduledPush:
+                summary: High priority push at a given time
+                value:
+                  channel: push
+                  content: Meeting in 10 minutes
+                  recipient: device-42
+                  timezone: America/New_York
+                  priority: high
+                  send_at: '2030-01-01T15:00:00Z'
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              schema: {type: string, example: /api/v1/notifications/1}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Notification'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '422': {$ref: '#/components/responses/Invalid'}
+    get:
+      tags: [notifications]
+      summary: List notifications
+      responses:
+        '200':
+          description: All notifications, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Notification'}
+  /api/v1/notifications/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [notifications]
+      summary: Get one notification
+      responses:
+        '200':
+          description: The notification
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Notification'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/notifications/{id}/send-now:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [notifications]
+      summary: Deliver a scheduled notification immediately
+      description: Skips the planned time and the quiet hours. Only possible while the status is `scheduled`.
+      responses:
+        '200':
+          description: The notification, now due
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Notification'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/notifications/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [notifications]
+      summary: Cancel a notification
+      description: Only possible while the status is `scheduled` or `queued`.
+      responses:
+        '200':
+          description: The cancelled notification
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Notification'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+  schemas:
+    NotificationInput:
+      type: object
+      required: [channel, content, recipient, timezone]
+      properties:
+        channel:
+          type: string
+          enum: [email, push]
+        content:
+          type: string
+          maxLength: 500
+        recipient:
+          type: string
+          description: An email address for the `email` channel, any device id for `push`.
+        timezone:
+          type: string
+          description: IANA time zone of the recipient.
+          example: Europe/Warsaw
+        priority:
+          type: string
+          enum: [low, high]
+          default: low
+          description: High priority notifications are more likely to be delivered first.
+        send_at:
+          type: string
+          format: date-time
+          description: Planned delivery time (RFC 3339). Defaults to now; a past time means now.
+    Notification:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        channel: {type: string, enum: [email, push]}
+        content: {type: string}
+        recipient: {type: string}
+        timezone: {type: string}
+        priority: {type: string, enum: [low, high]}
+        status:
+          type: string
+          enum: [scheduled, queued, sent, failed, cancelled]
+        scheduled_at:
+          type: string
+          format: date-time
+          description: When the notification becomes due, after the quiet hours were applied.
+        attempts:
+          type: integer
+          description: Delivery attempts so far (at most 3).
+        last_error:
+          type: string
+          description: Reason of the last failed attempt.
+        created_at: {type: string, format: date-time}
+        sent_at: {type: string, format: date-time}
+    Errors:
+      type: object
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: {type: string, example: channel}
+              message: {type: string, example: 'must be one of: email, push'}
+  responses:
+    BadRequest:
+      description: Malformed JSON or a bad id
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Errors'}
+    TooLarge:
+      description: Request body over 1 MiB
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Errors'}
+    Invalid:
+      description: Rule violation; every invalid field is listed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Errors'}
+    NotFound:
+      description: No notification with this id
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Errors'}
+    Conflict:
+      description: The current status does not allow this operation
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Errors'}

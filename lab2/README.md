@@ -11,7 +11,7 @@ lab2/
 │   ├── config/                # env configuration
 │   ├── db/                    # PostgreSQL connection pool
 │   ├── domain/                # shared types and errors
-│   ├── handler/               # presentation layer (HTTP, JSON)
+│   ├── handler/               # presentation layer (HTTP, JSON), openapi.yaml
 │   ├── service/               # business logic, validation, quiet hours
 │   ├── repository/            # data access (SQL)
 │   ├── queue/                 # RabbitMQ: queues, publish, consume, retry
@@ -94,6 +94,8 @@ Example:
 curl -i -X POST localhost:8080/api/v1/notifications -H 'Content-Type: application/json' \
   -d '{"channel":"email","content":"Hello","recipient":"ann@example.com","timezone":"Europe/Warsaw","priority":"high"}'
 ```
+
+**API documentation (Swagger):** with the API running, open http://localhost:8080/docs for Swagger UI (try the endpoints from the browser); the raw OpenAPI 3 spec is at `/openapi.yaml`. The spec is written by hand in `internal/handler/openapi.yaml` and embedded in the binary, so update it together with the endpoints. Swagger UI itself is loaded from a CDN, so the page needs internet access.
 
 ## Step 4 Tests
 
