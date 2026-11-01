@@ -36,6 +36,62 @@ services:
       timeout: 5s
       retries: 10
 
+  # Application services start only with `--profile app` (make app-up), so that
+  # `make up` + `make run` can be used for local development.
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        APP: api
+    container_name: lab2-api
+    restart: unless-stopped
+    environment: &app-env
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RETRY_DELAY: ${RETRY_DELAY:-5s}
+      FAIL_RATE: ${FAIL_RATE:-0}
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    depends_on: &app-deps
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker-email:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        APP: worker
+    container_name: lab2-worker-email
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      CHANNEL: email
+    depends_on: *app-deps
+
+  worker-push:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        APP: worker
+    container_name: lab2-worker-push
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      CHANNEL: push
+    depends_on: *app-deps
+
 volumes:
   pgdata:
   rabbitmqdata:

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 	"lab2/internal/db"
 	"lab2/internal/handler"
 	"lab2/internal/queue"
+	"lab2/internal/repository"
+	"lab2/internal/scheduler"
+	"lab2/internal/service"
 )
 
 func main() {
@@ -34,7 +38,19 @@ func main() {
 	}
 	defer broker.Close()
 
-	router := handler.NewRouter(pool, broker)
+	repo := repository.NewNotificationRepository(pool)
+
+	// The scheduler uses the pool and the broker, so main waits for it before
+	// the deferred Close calls run.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scheduler.New(repo, broker, cfg.SchedulerInterval).Run(ctx)
+	}()
+	defer wg.Wait()
+
+	router := handler.NewRouter(service.NewNotificationService(repo, time.Now), pool, broker)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           router,

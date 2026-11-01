@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 )
 
@@ -11,9 +10,17 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
-func NewRouter(db, broker Pinger) http.Handler {
+func NewRouter(notifications NotificationService, db, broker Pinger) http.Handler {
+	nh := notificationHandler{service: notifications}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(db, broker))
+
+	mux.HandleFunc("POST "+APIPrefix+"/notifications", nh.create)
+	mux.HandleFunc("GET "+APIPrefix+"/notifications", nh.list)
+	mux.HandleFunc("GET "+APIPrefix+"/notifications/{id}", nh.get)
+	mux.HandleFunc("POST "+APIPrefix+"/notifications/{id}/send-now", nh.sendNow)
+	mux.HandleFunc("POST "+APIPrefix+"/notifications/{id}/cancel", nh.cancel)
 	return mux
 }
 
@@ -27,8 +34,6 @@ func healthHandler(db, broker Pinger) http.HandlerFunc {
 			http.Error(w, "broker unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
