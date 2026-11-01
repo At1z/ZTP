@@ -1,11 +1,14 @@
-name: CI
+name: CI lab1
 
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'lab1/**'
+      - '.github/workflows/ci-lab1.yml'
 
 jobs:
-  test:
+  lab1:
     runs-on: ubuntu-latest
     defaults:
       run:
