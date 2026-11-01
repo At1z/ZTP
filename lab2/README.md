@@ -111,3 +111,11 @@ Run: `make test-unit` (no services needed), `make up && make test-integ`, or `ma
 | `integ/notification_test.go` | create / get / list, validation errors naming the field, each channel delivered by its own worker, delivery at the scheduled time, quiet hours postponed and overridden by send-now, cancel (scheduled and queued), retries and `failed` after 3 attempts, 3 competing workers deliver each of 30 notifications exactly once, high priority overtakes low |
 
 Configuration: the connections come from the same env variables as the API; the test database name can be changed with `TEST_DB_NAME`.
+
+## Workflow (GitHub Actions)
+
+`.github/workflows/ci-lab2.yml` (repository root) runs on every pull request to `main` that changes `lab2/**` or the workflow file itself. It starts PostgreSQL 16 and RabbitMQ 3 as service containers, checks `gofmt`, runs `go vet` and the unit and integration tests. Each lab has its own workflow (`ci-lab1.yml`, `ci-lab2.yml`, ...) with a `paths` filter, so a pull request only runs the tests of the lab it touches.
+
+The tests use the default connection settings (`lab2`/`lab2` on `localhost:5432` and `localhost:5672`), which match the service containers.
+
+Run the same checks locally with `gofmt -l .`, `go vet ./...` and `make test`.
