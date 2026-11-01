@@ -18,11 +18,14 @@ lab2/
 │   ├── scheduler/             # moves due notifications to the queues
 │   ├── worker/                # processes one message (attempts, retries)
 │   └── sender/                # simulated delivery
+├── tests/
+│   ├── unit/                  # service, scheduler and worker tests with in-memory fakes
+│   └── integ/                 # HTTP tests on real PostgreSQL and RabbitMQ
 ├── migrations/001_init.sql    # database schema (notifications table)
 ├── Dockerfile                 # builds the api or the worker image
 ├── docker-compose.yml         # PostgreSQL, RabbitMQ, api, worker-email, worker-push
 ├── .env.example               # settings template
-├── Makefile                   # up, down, reset, run, app-up, app-down
+├── Makefile                   # up, down, reset, run, app-up, app-down, test-unit, test-integ, test
 ├── go.mod / go.sum
 └── README.md
 ```
@@ -91,3 +94,20 @@ Example:
 curl -i -X POST localhost:8080/api/v1/notifications -H 'Content-Type: application/json' \
   -d '{"channel":"email","content":"Hello","recipient":"ann@example.com","timezone":"Europe/Warsaw","priority":"high"}'
 ```
+
+## Step 4 Tests
+
+Run: `make test-unit` (no services needed), `make up && make test-integ`, or `make test` for both.
+
+`tests/unit` checks the service, the scheduler and the worker against an in-memory fake that follows the same status rules as the SQL queries. The clock is injected, so quiet hours are tested with fixed dates.
+
+`tests/integ` starts the real router and scheduler on a real PostgreSQL and RabbitMQ and talks to them over HTTP (`net/http` client). Workers run in-process with a test sender that records deliveries and can be told to fail or to block. It uses a separate database, `lab2_test` (created and re-migrated on every run), and separate queues (`lab2test.*`), so development data is never touched and the workers of `make app-up` never steal test messages. Every test starts from an empty table and purged queues. Time zones are chosen from the current time (local noon or 23:00), so the tests pass at any hour of the day.
+
+| File | Covered requirements |
+|---|---|
+| `unit/notification_service_test.go` | validation of every field (all errors at once), defaults (low priority, send now), quiet hours around 08:00 / 22:00 and across time zones, cancel and send-now rules per status, 404 |
+| `unit/scheduler_test.go` | due notifications go to the queue of their channel with their priority, future and final ones are left alone, each is published once, a failed publish returns it to `scheduled` |
+| `unit/worker_test.go` | delivery marks `sent`, duplicate and stale messages are dropped (exactly once), retry after a failure, success on the 3rd attempt, `failed` after 3 attempts |
+| `integ/notification_test.go` | create / get / list, validation errors naming the field, each channel delivered by its own worker, delivery at the scheduled time, quiet hours postponed and overridden by send-now, cancel (scheduled and queued), retries and `failed` after 3 attempts, 3 competing workers deliver each of 30 notifications exactly once, high priority overtakes low |
+
+Configuration: the connections come from the same env variables as the API; the test database name can be changed with `TEST_DB_NAME`.

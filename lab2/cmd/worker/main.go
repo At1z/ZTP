@@ -32,7 +32,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	broker, err := queue.Connect(cfg.AMQPURL)
+	broker, err := queue.Connect(cfg.AMQPURL, cfg.QueuePrefix)
 	if err != nil {
 		log.Fatalf("rabbitmq: %v", err)
 	}

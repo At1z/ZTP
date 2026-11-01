@@ -11,6 +11,7 @@ type Config struct {
 	HTTPAddr    string
 	DatabaseURL string
 	AMQPURL     string
+	QueuePrefix string // queues are named <prefix>.<channel>
 
 	SchedulerInterval time.Duration // how often the API looks for due notifications
 	RetryDelay        time.Duration // wait before a failed delivery is retried
@@ -41,6 +42,7 @@ func Load() Config {
 			fmt.Sprintf("postgres://%s:%s@%s:%s/%s", pgUser, pgPassword, pgHost, pgPort, pgName)),
 		AMQPURL: getenv("AMQP_URL",
 			fmt.Sprintf("amqp://%s:%s@%s:%s/", mqUser, mqPassword, mqHost, mqPort)),
+		QueuePrefix:       getenv("QUEUE_PREFIX", "notifications"),
 		SchedulerInterval: getDuration("SCHEDULER_INTERVAL", time.Second),
 		RetryDelay:        getDuration("RETRY_DELAY", 5*time.Second),
 		Channel:           os.Getenv("CHANNEL"),

@@ -27,31 +27,21 @@ const (
 // Channels lists the delivery channels; each one gets its own queue.
 var Channels = []string{"email", "push"}
 
-// QueueName returns the name of the queue serving the given channel.
-func QueueName(channel string) string {
-	return "notifications." + channel
-}
-
-// RetryQueueName returns the delay queue of the given channel. Messages wait
-// there until they expire and are then dead-lettered back to the main queue.
-func RetryQueueName(channel string) string {
-	return QueueName(channel) + ".retry"
-}
-
 type message struct {
 	ID int64 `json:"id"`
 }
 
 // Broker holds a RabbitMQ connection and a confirm-mode channel for publishing.
 type Broker struct {
-	conn *amqp.Connection
-	mu   sync.Mutex // amqp channels are not safe for concurrent publishing
-	pub  *amqp.Channel
+	prefix string // queue name prefix, so that tests can use their own queues
+	conn   *amqp.Connection
+	mu     sync.Mutex // amqp channels are not safe for concurrent publishing
+	pub    *amqp.Channel
 }
 
 // Connect dials RabbitMQ and declares the queues of every channel. Declaring
 // is idempotent, so the API and every worker can call it on start.
-func Connect(url string) (*Broker, error) {
+func Connect(url, prefix string) (*Broker, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)
@@ -65,13 +55,14 @@ func Connect(url string) (*Broker, error) {
 		conn.Close()
 		return nil, fmt.Errorf("enable publisher confirms: %w", err)
 	}
+	b := &Broker{prefix: prefix, conn: conn, pub: pub}
 	for _, c := range Channels {
-		_, err := pub.QueueDeclare(QueueName(c), true, false, false, false,
+		_, err := pub.QueueDeclare(b.QueueName(c), true, false, false, false,
 			amqp.Table{"x-max-priority": int32(MaxPriority)})
 		if err == nil {
-			_, err = pub.QueueDeclare(RetryQueueName(c), true, false, false, false, amqp.Table{
+			_, err = pub.QueueDeclare(b.RetryQueueName(c), true, false, false, false, amqp.Table{
 				"x-dead-letter-exchange":    "",
-				"x-dead-letter-routing-key": QueueName(c),
+				"x-dead-letter-routing-key": b.QueueName(c),
 			})
 		}
 		if err != nil {
@@ -79,7 +70,18 @@ func Connect(url string) (*Broker, error) {
 			return nil, fmt.Errorf("declare queues of %s: %w", c, err)
 		}
 	}
-	return &Broker{conn: conn, pub: pub}, nil
+	return b, nil
+}
+
+// QueueName returns the name of the queue serving the given channel.
+func (b *Broker) QueueName(channel string) string {
+	return b.prefix + "." + channel
+}
+
+// RetryQueueName returns the delay queue of the given channel. Messages wait
+// there until they expire and are then dead-lettered back to the main queue.
+func (b *Broker) RetryQueueName(channel string) string {
+	return b.QueueName(channel) + ".retry"
 }
 
 // Ping reports whether the connection to RabbitMQ is still open.
@@ -97,12 +99,12 @@ func (b *Broker) Close() error {
 // Publish sends a notification id to the queue of its channel and returns once
 // the broker has confirmed it.
 func (b *Broker) Publish(ctx context.Context, channel string, id int64, priority domain.Priority) error {
-	return b.publish(ctx, QueueName(channel), id, priority, "")
+	return b.publish(ctx, b.QueueName(channel), id, priority, "")
 }
 
 // Retry sends the id to the delay queue; it returns to the main queue after delay.
 func (b *Broker) Retry(ctx context.Context, channel string, id int64, priority domain.Priority, delay time.Duration) error {
-	return b.publish(ctx, RetryQueueName(channel), id, priority,
+	return b.publish(ctx, b.RetryQueueName(channel), id, priority,
 		strconv.FormatInt(delay.Milliseconds(), 10))
 }
 
@@ -149,7 +151,7 @@ func (b *Broker) Consume(ctx context.Context, channel string, handle func(ctx co
 	if err := ch.Qos(1, 0, false); err != nil {
 		return fmt.Errorf("set prefetch: %w", err)
 	}
-	deliveries, err := ch.Consume(QueueName(channel), "", false, false, false, false, nil)
+	deliveries, err := ch.Consume(b.QueueName(channel), "", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("consume: %w", err)
 	}
