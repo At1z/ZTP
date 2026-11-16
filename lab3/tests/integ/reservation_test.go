@@ -181,6 +181,10 @@ func TestReservingAgainDoesNotExtendExpiry(t *testing.T) {
 	}
 }
 
+func (e *env) confirm(cart uuid.UUID, items ...domain.ConfirmItem) error {
+	return e.reservations.Confirm(context.Background(), service.ConfirmReservationsCommand{CartID: cart, Items: items})
+}
+
 func TestConfirmDecrementsStockAndKeepsItFinal(t *testing.T) {
 	e := newEnv(t, time.Minute)
 	product := e.addProduct(t, 3)
@@ -189,7 +193,7 @@ func TestConfirmDecrementsStockAndKeepsItFinal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := e.reservations.Confirm(context.Background(), service.ConfirmReservationsCommand{CartID: cart}); err != nil {
+	if err := e.confirm(cart, domain.ConfirmItem{ProductID: product, Quantity: 2}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -199,9 +203,69 @@ func TestConfirmDecrementsStockAndKeepsItFinal(t *testing.T) {
 	if got := e.available(t, product); got != 1 {
 		t.Fatalf("available = %d, want 1", got)
 	}
-	err := e.reservations.Confirm(context.Background(), service.ConfirmReservationsCommand{CartID: cart})
+}
+
+// A retried checkout confirms the same cart again: it must succeed without
+// taking the stock a second time.
+func TestConfirmIsIdempotentPerCart(t *testing.T) {
+	e := newEnv(t, time.Minute)
+	product := e.addProduct(t, 3)
+	cart := uuid.New()
+	if err := e.reserve(product, cart, 2); err != nil {
+		t.Fatal(err)
+	}
+	item := domain.ConfirmItem{ProductID: product, Quantity: 2}
+
+	for i := 0; i < 3; i++ {
+		if err := e.confirm(cart, item); err != nil {
+			t.Fatalf("confirm %d: %v", i, err)
+		}
+	}
+
+	if got := e.stock(t, product); got != 1 {
+		t.Fatalf("stock = %d, want 1 (decremented once)", got)
+	}
+}
+
+func TestConcurrentConfirmsOfOneCartDecrementOnce(t *testing.T) {
+	e := newEnv(t, time.Minute)
+	product := e.addProduct(t, 5)
+	cart := uuid.New()
+	if err := e.reserve(product, cart, 2); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, errs := runConcurrently(10, func(int) error {
+		return e.confirm(cart, domain.ConfirmItem{ProductID: product, Quantity: 2})
+	})
+
+	if ok != 10 {
+		t.Fatalf("%d confirms succeeded, errors: %v", ok, errs)
+	}
+	if got := e.stock(t, product); got != 3 {
+		t.Fatalf("stock = %d, want 3", got)
+	}
+}
+
+func TestConfirmFailsWithoutReservationOrWithWrongQuantity(t *testing.T) {
+	e := newEnv(t, time.Minute)
+	product := e.addProduct(t, 5)
+	cart := uuid.New()
+
+	err := e.confirm(cart, domain.ConfirmItem{ProductID: product, Quantity: 1})
 	if !errors.Is(err, domain.ErrReservationNotFound) {
-		t.Fatalf("second confirm err = %v, want ErrReservationNotFound", err)
+		t.Fatalf("no reservation: err = %v, want ErrReservationNotFound", err)
+	}
+
+	if err := e.reserve(product, cart, 2); err != nil {
+		t.Fatal(err)
+	}
+	err = e.confirm(cart, domain.ConfirmItem{ProductID: product, Quantity: 1})
+	if !errors.Is(err, domain.ErrReservationMismatch) {
+		t.Fatalf("wrong quantity: err = %v, want ErrReservationMismatch", err)
+	}
+	if got := e.stock(t, product); got != 5 {
+		t.Fatalf("stock = %d, want 5 (nothing confirmed)", got)
 	}
 }
 
@@ -215,17 +279,24 @@ func TestConfirmFailsAfterExpiryWithoutChangingStock(t *testing.T) {
 
 	time.Sleep(1200 * time.Millisecond)
 
-	err := e.reservations.Confirm(context.Background(), service.ConfirmReservationsCommand{CartID: cart})
+	err := e.confirm(cart, domain.ConfirmItem{ProductID: product, Quantity: 1})
 	if !errors.Is(err, domain.ErrReservationExpired) {
 		t.Fatalf("err = %v, want ErrReservationExpired", err)
 	}
 	if got := e.stock(t, product); got != 1 {
 		t.Fatalf("stock = %d, want 1", got)
 	}
+	// The failed confirm must not mark the cart as confirmed.
+	if err := e.reserve(product, cart, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.confirm(cart, domain.ConfirmItem{ProductID: product, Quantity: 1}); err != nil {
+		t.Fatalf("confirm of a fresh reservation: %v", err)
+	}
 }
 
-// Confirming two carts that reserved the same products in opposite order must
-// not deadlock (products are always locked in id order).
+// Two carts holding the same products, confirmed at once, must not deadlock
+// (products are always locked in id order).
 func TestConcurrentConfirmsDoNotDeadlock(t *testing.T) {
 	e := newEnv(t, time.Minute)
 	a, b := e.addProduct(t, 10), e.addProduct(t, 10)
@@ -235,10 +306,15 @@ func TestConcurrentConfirmsDoNotDeadlock(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-
 	carts := []uuid.UUID{cartX, cartY}
+	// Each cart lists the products in a different order.
+	lists := [][]domain.ConfirmItem{
+		{{ProductID: a, Quantity: 1}, {ProductID: b, Quantity: 1}},
+		{{ProductID: b, Quantity: 1}, {ProductID: a, Quantity: 1}},
+	}
+
 	ok, errs := runConcurrently(2, func(i int) error {
-		return e.reservations.Confirm(context.Background(), service.ConfirmReservationsCommand{CartID: carts[i]})
+		return e.confirm(carts[i], lists[i]...)
 	})
 
 	if ok != 2 {

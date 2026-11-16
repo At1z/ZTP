@@ -35,7 +35,9 @@ func (f *fakeReservations) ReleaseCart(_ context.Context, cartID uuid.UUID) erro
 	return f.err
 }
 
-func (f *fakeReservations) Confirm(context.Context, uuid.UUID) error { return f.err }
+func (f *fakeReservations) Confirm(context.Context, uuid.UUID, []domain.ConfirmItem) error {
+	return f.err
+}
 
 type fakeProducts struct {
 	products []domain.Product

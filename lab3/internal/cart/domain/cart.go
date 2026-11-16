@@ -57,3 +57,23 @@ type ReserveRequest struct {
 	ProductID uuid.UUID
 	Quantity  int
 }
+
+// ConfirmItem is one purchased line, as the product service wants it.
+type ConfirmItem struct {
+	ProductID uuid.UUID
+	Quantity  int
+}
+
+// CreateOrderRequest is what the order service needs to start an order.
+type CreateOrderRequest struct {
+	UserID uuid.UUID
+	CartID uuid.UUID
+	Items  []Item
+}
+
+// Order is what the cart knows about the order created by a checkout.
+type Order struct {
+	ID         uuid.UUID
+	Status     string
+	TotalCents int64
+}

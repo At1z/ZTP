@@ -83,6 +83,8 @@ func TestReleaseAndConfirmOverHTTP(t *testing.T) {
 	e := newEnv(t, time.Minute)
 	product := e.addProduct(t, 2)
 	cart := uuid.New()
+	confirmPath := fmt.Sprintf("/reservations/%s/confirm", cart)
+	confirmBody := fmt.Sprintf(`{"items":[{"product_id":%q,"quantity":1}]}`, product)
 	if rec := e.do("POST", "/reservations", reserveBody(product, cart, 1)); rec.Code != http.StatusCreated {
 		t.Fatalf("reserve: status = %d", rec.Code)
 	}
@@ -90,14 +92,17 @@ func TestReleaseAndConfirmOverHTTP(t *testing.T) {
 	if rec := e.do("DELETE", fmt.Sprintf("/reservations/%s/%s", cart, product), ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("release: status = %d", rec.Code)
 	}
-	if rec := e.do("POST", fmt.Sprintf("/reservations/%s/confirm", cart), ""); rec.Code != http.StatusNotFound {
+	if rec := e.do("POST", confirmPath, confirmBody); rec.Code != http.StatusNotFound {
 		t.Fatalf("confirm without reservation: status = %d, want 404", rec.Code)
 	}
 
 	if rec := e.do("POST", "/reservations", reserveBody(product, cart, 1)); rec.Code != http.StatusCreated {
 		t.Fatalf("reserve again: status = %d", rec.Code)
 	}
-	if rec := e.do("POST", fmt.Sprintf("/reservations/%s/confirm", cart), ""); rec.Code != http.StatusOK {
-		t.Fatalf("confirm: status = %d", rec.Code)
+	if rec := e.do("POST", confirmPath, `{"items":[]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("confirm without items: status = %d, want 400", rec.Code)
+	}
+	if rec := e.do("POST", confirmPath, confirmBody); rec.Code != http.StatusOK {
+		t.Fatalf("confirm: status = %d, body = %s", rec.Code, rec.Body)
 	}
 }

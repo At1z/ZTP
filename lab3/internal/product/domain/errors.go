@@ -8,4 +8,5 @@ var (
 	ErrInsufficientStock   = errors.New("insufficient stock")
 	ErrReservationNotFound = errors.New("reservation not found")
 	ErrReservationExpired  = errors.New("reservation expired")
+	ErrReservationMismatch = errors.New("reservation does not match the purchased quantity")
 )

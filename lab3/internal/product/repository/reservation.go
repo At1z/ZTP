@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"lab3/internal/product/domain"
 
@@ -108,57 +110,63 @@ func (r *ReservationRepository) ReleaseCart(ctx context.Context, cartID uuid.UUI
 	return nil
 }
 
-func (r *ReservationRepository) Confirm(ctx context.Context, cartID uuid.UUID) error {
+func (r *ReservationRepository) Confirm(ctx context.Context, cartID uuid.UUID, items []domain.ConfirmItem) error {
+	// Always lock and process the products in id order (see the strategy above).
+	sorted := append([]domain.ConfirmItem(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i].ProductID[:], sorted[j].ProductID[:]) < 0
+	})
+
 	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
-		// Products first, in id order, then the cart's reservations. The cart
-		// service serializes operations on one cart, so the set of reserved
-		// products cannot change between the two statements.
-		_, err := tx.Exec(ctx, `
-			SELECT 1 FROM products
-			WHERE id IN (SELECT product_id FROM reservations WHERE cart_id = $1)
-			ORDER BY id FOR UPDATE`, cartID)
+		// Idempotency: a cart is confirmed once. A concurrent confirm of the
+		// same cart waits here for the first one to commit and then sees the row.
+		tag, err := tx.Exec(ctx, `INSERT INTO confirmed_carts (cart_id) VALUES ($1) ON CONFLICT DO NOTHING`, cartID)
 		if err != nil {
-			return fmt.Errorf("lock products: %w", err)
+			return fmt.Errorf("mark cart confirmed: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return nil
 		}
 
-		type line struct {
-			ProductID uuid.UUID
-			Quantity  int
-			Expired   bool
-		}
-		rows, err := tx.Query(ctx, `
-			SELECT product_id, quantity, expires_at <= now() AS expired
-			FROM reservations WHERE cart_id = $1 ORDER BY product_id FOR UPDATE`, cartID)
-		if err != nil {
-			return fmt.Errorf("load reservations: %w", err)
-		}
-		lines, err := pgx.CollectRows(rows, pgx.RowToStructByPos[line])
-		if err != nil {
-			return fmt.Errorf("scan reservations: %w", err)
-		}
-
-		if len(lines) == 0 {
-			return domain.ErrReservationNotFound
-		}
-		for _, l := range lines {
-			if l.Expired {
-				return domain.ErrReservationExpired
+		for _, it := range sorted {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM products WHERE id = $1 FOR UPDATE`, it.ProductID); err != nil {
+				return fmt.Errorf("lock product: %w", err)
 			}
 		}
 
-		for _, l := range lines {
+		for _, it := range sorted {
+			var (
+				quantity int
+				expired  bool
+			)
+			err := tx.QueryRow(ctx, `
+				SELECT quantity, expires_at <= now() FROM reservations
+				WHERE cart_id = $1 AND product_id = $2 FOR UPDATE`, cartID, it.ProductID).Scan(&quantity, &expired)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrReservationNotFound
+			}
+			if err != nil {
+				return fmt.Errorf("load reservation: %w", err)
+			}
+			if expired {
+				return domain.ErrReservationExpired
+			}
+			if quantity != it.Quantity {
+				return domain.ErrReservationMismatch
+			}
+
 			tag, err := tx.Exec(ctx,
-				`UPDATE products SET stock = stock - $2 WHERE id = $1 AND stock >= $2`, l.ProductID, l.Quantity)
+				`UPDATE products SET stock = stock - $2 WHERE id = $1 AND stock >= $2`, it.ProductID, it.Quantity)
 			if err != nil {
 				return fmt.Errorf("decrement stock: %w", err)
 			}
 			if tag.RowsAffected() == 0 {
 				return domain.ErrInsufficientStock
 			}
-		}
-
-		if _, err := tx.Exec(ctx, `DELETE FROM reservations WHERE cart_id = $1`, cartID); err != nil {
-			return fmt.Errorf("delete reservations: %w", err)
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM reservations WHERE cart_id = $1 AND product_id = $2`, cartID, it.ProductID); err != nil {
+				return fmt.Errorf("delete reservation: %w", err)
+			}
 		}
 		return nil
 	})

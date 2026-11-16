@@ -134,7 +134,8 @@ Opis tego mechanizmu ma być w komentarzach w kodzie (repozytorium koszyka i Use
 
 ## 8. Zamówienia i powiadomienia (serwis `order`)
 
-- `Checkout` w `cart`: blokuje koszyk, odczytuje pozycje, wysyła `POST /orders` do `order` (migawka pozycji, cen i `user_id`), potwierdza rezerwacje w `product` (zmniejszenie `stock`), zamyka koszyk.
+- `Checkout` w `cart`: blokuje koszyk, odczytuje pozycje, potwierdza rezerwacje w `product` (zmniejszenie `stock`, jawna lista pozycji), wysyła `POST /orders` do `order` (migawka pozycji, cen i `user_id`), zamyka koszyk. Wygasła rezerwacja przerywa checkout przed jakimkolwiek zakupem.
+- Awaria `order` po zakupie towaru: koszyk zostaje otwarty, a ponowienie checkoutu jest bezpieczne, bo potwierdzenie (per koszyk) i utworzenie zamówienia (per `cart_id`) są idempotentne.
 - `order` zapisuje zamówienie ze statusem `processing` i tworzy powiadomienie "Rozpoczęto realizację zamówienia".
 - Powiadomienia odczytuje się przez `GET /notifications` (dla użytkownika z `X-User-ID`).
 - Brak prawdziwej płatności. Realizacja jest symulowana.
@@ -154,7 +155,8 @@ Wszystkie endpointy koszyka i zamówień wymagają nagłówka `X-User-ID`.
 |---|---|---|
 | POST | `/reservations` | zarezerwuj produkt dla koszyka (`409` przy braku stanu) |
 | DELETE | `/reservations/{cartId}/{productId}` | zwolnij rezerwację |
-| POST | `/reservations/{cartId}/confirm` | potwierdź rezerwacje i zmniejsz stan |
+| POST | `/reservations/{cartId}/confirm` | kupno: body `{"items":[{"product_id","quantity"}]}`; zmniejsza stan i usuwa rezerwacje; idempotentne per koszyk (tabela `confirmed_carts`) |
+| DELETE | `/reservations/{cartId}` | zwolnij wszystkie rezerwacje koszyka |
 
 ### cart
 | Metoda | Endpoint | Opis |
@@ -163,13 +165,13 @@ Wszystkie endpointy koszyka i zamówień wymagają nagłówka `X-User-ID`.
 | GET | `/cart` | pozycje, suma, czas wygaśnięcia |
 | POST | `/cart/items` | dodaj produkt i zablokuj (`{"product_id": "...", "quantity": 1}`) |
 | DELETE | `/cart/items/{productId}` | usuń pozycję i zwolnij blokadę |
-| POST | `/cart/checkout` | zatwierdź koszyk, utwórz zamówienie |
+| POST | `/cart/checkout` | zatwierdź koszyk: kup rezerwacje, utwórz zamówienie, zamknij koszyk (`201`; `409` pusty koszyk lub wygasła rezerwacja; `502` serwis niedostępny) |
 
 ### order
 | Metoda | Endpoint | Opis |
 |---|---|---|
-| POST | `/orders` | utwórz zamówienie (wołane przez cart) |
-| GET | `/orders/{id}` | szczegóły zamówienia |
+| POST | `/orders` | utwórz zamówienie (wołane przez cart, nagłówek `X-User-ID`); idempotentne per koszyk: `201` nowe, `200` istniejące |
+| GET | `/orders/{id}` | szczegóły zamówienia (tylko właściciel, inaczej `404`) |
 | GET | `/notifications` | powiadomienia użytkownika |
 
 ### Kody odpowiedzi

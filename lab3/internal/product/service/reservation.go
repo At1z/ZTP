@@ -66,8 +66,27 @@ func (s *ReservationService) ReleaseCart(ctx context.Context, cmd ReleaseCartCom
 
 type ConfirmReservationsCommand struct {
 	CartID uuid.UUID
+	Items  []domain.ConfirmItem
 }
 
 func (s *ReservationService) Confirm(ctx context.Context, cmd ConfirmReservationsCommand) error {
-	return s.reservations.Confirm(ctx, cmd.CartID)
+	if cmd.CartID == uuid.Nil {
+		return fmt.Errorf("%w: cart_id is required", domain.ErrInvalidInput)
+	}
+	if len(cmd.Items) == 0 {
+		return fmt.Errorf("%w: items are required", domain.ErrInvalidInput)
+	}
+	seen := make(map[uuid.UUID]bool, len(cmd.Items))
+	for _, it := range cmd.Items {
+		switch {
+		case it.ProductID == uuid.Nil:
+			return fmt.Errorf("%w: product_id is required", domain.ErrInvalidInput)
+		case it.Quantity <= 0:
+			return fmt.Errorf("%w: quantity must be positive", domain.ErrInvalidInput)
+		case seen[it.ProductID]:
+			return fmt.Errorf("%w: duplicate product %s", domain.ErrInvalidInput, it.ProductID)
+		}
+		seen[it.ProductID] = true
+	}
+	return s.reservations.Confirm(ctx, cmd.CartID, cmd.Items)
 }

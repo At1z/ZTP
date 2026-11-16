@@ -62,6 +62,13 @@ type reserveRequest struct {
 	Quantity  int       `json:"quantity"`
 }
 
+type confirmRequest struct {
+	Items []struct {
+		ProductID uuid.UUID `json:"product_id"`
+		Quantity  int       `json:"quantity"`
+	} `json:"items"`
+}
+
 type reservationResponse struct {
 	ID        uuid.UUID `json:"id"`
 	ProductID uuid.UUID `json:"product_id"`
@@ -163,7 +170,16 @@ func (s *handler) confirm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.reservations.Confirm(r.Context(), service.ConfirmReservationsCommand{CartID: cartID}); err != nil {
+	var req confirmRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	items := make([]domain.ConfirmItem, len(req.Items))
+	for i, it := range req.Items {
+		items[i] = domain.ConfirmItem{ProductID: it.ProductID, Quantity: it.Quantity}
+	}
+	if err := s.reservations.Confirm(r.Context(), service.ConfirmReservationsCommand{CartID: cartID, Items: items}); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -185,7 +201,9 @@ func writeError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, domain.ErrNotFound), errors.Is(err, domain.ErrReservationNotFound):
 		httpx.Error(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, domain.ErrInsufficientStock), errors.Is(err, domain.ErrReservationExpired):
+	case errors.Is(err, domain.ErrInsufficientStock),
+		errors.Is(err, domain.ErrReservationExpired),
+		errors.Is(err, domain.ErrReservationMismatch):
 		httpx.Error(w, http.StatusConflict, err.Error())
 	default:
 		log.Printf("internal error: %v", err)

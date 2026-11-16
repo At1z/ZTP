@@ -31,10 +31,13 @@ type CartRepository interface {
 // CartTx is the locked cart handed to Mutate.
 type CartTx interface {
 	Cart() Cart // header only, without items
+	Items(ctx context.Context) ([]Item, error)
 	// UpsertItem adds the quantity to an existing line or creates the line.
 	UpsertItem(ctx context.Context, item Item) error
 	// DeleteItem removes the line and reports whether it existed.
 	DeleteItem(ctx context.Context, productID uuid.UUID) (bool, error)
+	// MarkCheckedOut closes the cart; the user can then open a new one.
+	MarkCheckedOut(ctx context.Context) error
 }
 
 // ProductClient talks to the product service over HTTP.
@@ -44,4 +47,15 @@ type ProductClient interface {
 	Reserve(ctx context.Context, req ReserveRequest) error
 	Release(ctx context.Context, cartID, productID uuid.UUID) error
 	ReleaseCart(ctx context.Context, cartID uuid.UUID) error
+	// Confirm buys the reserved items: the stock is decremented for good. It
+	// returns ErrReservationExpired when a reservation is gone or expired and
+	// is idempotent per cart, so a checkout can be retried.
+	Confirm(ctx context.Context, cartID uuid.UUID, items []ConfirmItem) error
+}
+
+// OrderClient talks to the order service over HTTP.
+type OrderClient interface {
+	// CreateOrder is idempotent per cart: it returns the existing order when
+	// the cart already has one.
+	CreateOrder(ctx context.Context, req CreateOrderRequest) (Order, error)
 }

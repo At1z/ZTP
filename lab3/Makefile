@@ -1,4 +1,4 @@
-.PHONY: up down reset run-product run-cart app-up app-down test test-unit test-integ
+.PHONY: up down reset run-product run-cart run-order app-up app-down test test-unit test-integ
 
 # Infrastructure only (PostgreSQL with the products, carts and orders databases).
 up:
@@ -19,12 +19,16 @@ run-product:
 run-cart:
 	go run ./cmd/cart
 
+# Order service on the host (needs `make up`).
+run-order:
+	go run ./cmd/order
+
 # Everything in containers.
 app-up:
 	docker compose --profile app up -d --build --wait
 
 app-down:
-	docker compose --profile app stop cart product
+	docker compose --profile app stop cart order product
 
 # Unit tests use in-memory fakes and need no services.
 test-unit:

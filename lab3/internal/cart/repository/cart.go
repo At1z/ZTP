@@ -133,6 +133,28 @@ type cartTx struct {
 
 func (t *cartTx) Cart() domain.Cart { return t.cart }
 
+func (t *cartTx) Items(ctx context.Context) ([]domain.Item, error) {
+	rows, err := t.tx.Query(ctx, `
+		SELECT product_id, product_name, round(unit_price * 100)::bigint, quantity
+		FROM cart_items WHERE cart_id = $1 ORDER BY product_name, product_id`, t.cart.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load cart items: %w", err)
+	}
+	items, err := pgx.CollectRows(rows, pgx.RowToStructByPos[domain.Item])
+	if err != nil {
+		return nil, fmt.Errorf("scan cart items: %w", err)
+	}
+	return items, nil
+}
+
+func (t *cartTx) MarkCheckedOut(ctx context.Context) error {
+	_, err := t.tx.Exec(ctx, `UPDATE carts SET status = 'checked_out' WHERE id = $1`, t.cart.ID)
+	if err != nil {
+		return fmt.Errorf("close cart: %w", err)
+	}
+	return nil
+}
+
 func (t *cartTx) UpsertItem(ctx context.Context, item domain.Item) error {
 	// One atomic statement instead of read-modify-write. The price of an
 	// existing line is kept.

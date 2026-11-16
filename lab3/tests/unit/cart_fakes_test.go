@@ -21,8 +21,14 @@ func newFakeCartRepo() *fakeCartRepo {
 	return &fakeCartRepo{carts: map[uuid.UUID]*cartdomain.Cart{}}
 }
 
+// open returns the user's open cart, if any.
+func (r *fakeCartRepo) open(userID uuid.UUID) (*cartdomain.Cart, bool) {
+	c, ok := r.carts[userID]
+	return c, ok && c.Status == cartdomain.StatusOpen
+}
+
 func (r *fakeCartRepo) OpenCart(_ context.Context, userID uuid.UUID, ttl time.Duration) (cartdomain.Cart, bool, error) {
-	if c, ok := r.carts[userID]; ok {
+	if c, ok := r.open(userID); ok {
 		return *c, false, nil
 	}
 	c := &cartdomain.Cart{
@@ -36,7 +42,7 @@ func (r *fakeCartRepo) OpenCart(_ context.Context, userID uuid.UUID, ttl time.Du
 }
 
 func (r *fakeCartRepo) GetOpenCart(_ context.Context, userID uuid.UUID) (cartdomain.Cart, error) {
-	c, ok := r.carts[userID]
+	c, ok := r.open(userID)
 	if !ok {
 		return cartdomain.Cart{}, cartdomain.ErrCartNotFound
 	}
@@ -46,13 +52,13 @@ func (r *fakeCartRepo) GetOpenCart(_ context.Context, userID uuid.UUID) (cartdom
 }
 
 func (r *fakeCartRepo) Mutate(ctx context.Context, userID uuid.UUID, fn func(context.Context, cartdomain.CartTx) error) error {
-	c, ok := r.carts[userID]
+	c, ok := r.open(userID)
 	if !ok {
 		return cartdomain.ErrCartNotFound
 	}
-	snapshot := append([]cartdomain.Item{}, c.Items...)
+	items, status := append([]cartdomain.Item{}, c.Items...), c.Status
 	if err := fn(ctx, &fakeCartTx{cart: c}); err != nil {
-		c.Items = snapshot
+		c.Items, c.Status = items, status
 		return err
 	}
 	return nil
@@ -70,6 +76,15 @@ func (t *fakeCartTx) Cart() cartdomain.Cart {
 	c := *t.cart
 	c.Items = nil
 	return c
+}
+
+func (t *fakeCartTx) Items(context.Context) ([]cartdomain.Item, error) {
+	return append([]cartdomain.Item{}, t.cart.Items...), nil
+}
+
+func (t *fakeCartTx) MarkCheckedOut(context.Context) error {
+	t.cart.Status = cartdomain.StatusCheckedOut
+	return nil
 }
 
 func (t *fakeCartTx) UpsertItem(_ context.Context, item cartdomain.Item) error {
@@ -100,7 +115,9 @@ type fakeProductClient struct {
 	reserved    map[uuid.UUID]int // by product, quantity reserved so far
 	released    []uuid.UUID       // cart ids passed to Release/ReleaseCart
 	releaseErr  error
+	confirmErr  error
 	reserveCall []cartdomain.ReserveRequest
+	confirmed   [][]cartdomain.ConfirmItem
 }
 
 func newFakeProductClient() *fakeProductClient {
@@ -150,6 +167,28 @@ func (p *fakeProductClient) ReleaseCart(_ context.Context, cartID uuid.UUID) err
 	}
 	p.released = append(p.released, cartID)
 	return nil
+}
+
+func (p *fakeProductClient) Confirm(_ context.Context, _ uuid.UUID, items []cartdomain.ConfirmItem) error {
+	if p.confirmErr != nil {
+		return p.confirmErr
+	}
+	p.confirmed = append(p.confirmed, items)
+	return nil
+}
+
+// fakeOrderClient plays the order service.
+type fakeOrderClient struct {
+	requests []cartdomain.CreateOrderRequest
+	err      error
+}
+
+func (o *fakeOrderClient) CreateOrder(_ context.Context, req cartdomain.CreateOrderRequest) (cartdomain.Order, error) {
+	if o.err != nil {
+		return cartdomain.Order{}, o.err
+	}
+	o.requests = append(o.requests, req)
+	return cartdomain.Order{ID: uuid.New(), Status: "processing", TotalCents: 1}, nil
 }
 
 var errBoom = errors.New("boom")

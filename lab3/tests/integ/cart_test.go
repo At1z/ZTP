@@ -233,7 +233,7 @@ func TestProductServiceDownGivesBadGateway(t *testing.T) {
 	down := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
-	c := newCartEnvFor(t, product, down, time.Minute)
+	c := newCartEnvFor(t, product, down, newOrderEnv(t), nil, time.Minute)
 	user := uuid.New()
 	c.openCart(t, user)
 

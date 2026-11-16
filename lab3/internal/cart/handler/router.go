@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const userHeader = "X-User-ID"
-
 // handler translates HTTP to service calls and service errors to status codes.
 type handler struct {
 	queries  *service.CartQueryService
@@ -32,6 +30,7 @@ func NewRouter(queries *service.CartQueryService, commands *service.CartCommandS
 	mux.HandleFunc("GET /cart", h.getCart)
 	mux.HandleFunc("POST /cart/items", h.addItem)
 	mux.HandleFunc("DELETE /cart/items/{productId}", h.removeItem)
+	mux.HandleFunc("POST /cart/checkout", h.checkout)
 	return mux
 }
 
@@ -85,7 +84,7 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) openCart(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
+	userID, ok := httpx.UserID(w, r)
 	if !ok {
 		return
 	}
@@ -102,7 +101,7 @@ func (h *handler) openCart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getCart(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
+	userID, ok := httpx.UserID(w, r)
 	if !ok {
 		return
 	}
@@ -115,7 +114,7 @@ func (h *handler) getCart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) addItem(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
+	userID, ok := httpx.UserID(w, r)
 	if !ok {
 		return
 	}
@@ -137,7 +136,7 @@ func (h *handler) addItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) removeItem(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
+	userID, ok := httpx.UserID(w, r)
 	if !ok {
 		return
 	}
@@ -154,14 +153,23 @@ func (h *handler) removeItem(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, toCartResponse(cart))
 }
 
-// requireUser identifies the caller by the UUID in the X-User-ID header.
-func requireUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(r.Header.Get(userHeader))
-	if err != nil || id == uuid.Nil {
-		httpx.Error(w, http.StatusUnauthorized, userHeader+" header with a user UUID is required")
-		return uuid.Nil, false
+type orderResponse struct {
+	OrderID    uuid.UUID `json:"order_id"`
+	Status     string    `json:"status"`
+	TotalCents int64     `json:"total_cents"`
+}
+
+func (h *handler) checkout(w http.ResponseWriter, r *http.Request) {
+	userID, ok := httpx.UserID(w, r)
+	if !ok {
+		return
 	}
-	return id, true
+	order, err := h.commands.Checkout(r.Context(), service.CheckoutCommand{UserID: userID})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, orderResponse{OrderID: order.ID, Status: order.Status, TotalCents: order.TotalCents})
 }
 
 func writeError(w http.ResponseWriter, err error) {
@@ -172,11 +180,16 @@ func writeError(w http.ResponseWriter, err error) {
 		errors.Is(err, domain.ErrItemNotFound),
 		errors.Is(err, domain.ErrProductNotFound):
 		httpx.Error(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, domain.ErrInsufficientStock):
+	case errors.Is(err, domain.ErrInsufficientStock),
+		errors.Is(err, domain.ErrEmptyCart),
+		errors.Is(err, domain.ErrReservationExpired):
 		httpx.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrProductServiceUnavailable):
 		log.Printf("product service: %v", err)
 		httpx.Error(w, http.StatusBadGateway, "product service unavailable")
+	case errors.Is(err, domain.ErrOrderServiceUnavailable):
+		log.Printf("order service: %v", err)
+		httpx.Error(w, http.StatusBadGateway, "order service unavailable")
 	default:
 		log.Printf("internal error: %v", err)
 		httpx.Error(w, http.StatusInternalServerError, "internal error")

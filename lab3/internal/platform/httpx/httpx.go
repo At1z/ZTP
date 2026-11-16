@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 const maxBodyBytes = 1 << 20
@@ -30,4 +32,17 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
+}
+
+const UserHeader = "X-User-ID"
+
+// UserID identifies the caller by the UUID in the X-User-ID header and writes
+// 401 when it is missing or malformed.
+func UserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.Header.Get(UserHeader))
+	if err != nil || id == uuid.Nil {
+		Error(w, http.StatusUnauthorized, UserHeader+" header with a user UUID is required")
+		return uuid.Nil, false
+	}
+	return id, true
 }

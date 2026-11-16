@@ -24,6 +24,7 @@ func main() {
 	cartTTL := config.Duration("CART_TTL", 15*time.Minute)
 	sweepInterval := config.Duration("CART_SWEEP_INTERVAL", 10*time.Second)
 	productURL := config.String("PRODUCT_SERVICE_URL", "http://localhost:8081")
+	orderURL := config.String("ORDER_SERVICE_URL", "http://localhost:8083")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -35,8 +36,10 @@ func main() {
 	defer pool.Close()
 
 	carts := repository.NewCartRepository(pool)
-	products := client.NewProductClient(productURL, &http.Client{Timeout: 5 * time.Second})
-	commands := service.NewCartCommandService(carts, products, cartTTL)
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	products := client.NewProductClient(productURL, httpClient)
+	orders := client.NewOrderClient(orderURL, httpClient)
+	commands := service.NewCartCommandService(carts, products, orders, cartTTL)
 
 	go scheduler.Run(ctx, commands, sweepInterval)
 
@@ -53,7 +56,7 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("cart service listening on %s (cart ttl %s, product service %s)", cfg.HTTPAddr, cartTTL, productURL)
+	log.Printf("cart service listening on %s (cart ttl %s, product service %s, order service %s)", cfg.HTTPAddr, cartTTL, productURL, orderURL)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server: %v", err)
 	}

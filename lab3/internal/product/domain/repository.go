@@ -20,8 +20,10 @@ type ReservationRepository interface {
 	Release(ctx context.Context, cartID, productID uuid.UUID) error
 	// ReleaseCart drops all reservations of the cart. It is idempotent.
 	ReleaseCart(ctx context.Context, cartID uuid.UUID) error
-	// Confirm turns the cart's reservations into a purchase: it decrements the
-	// stock and removes the reservations, or fails with ErrReservationNotFound
-	// or ErrReservationExpired without changing anything.
-	Confirm(ctx context.Context, cartID uuid.UUID) error
+	// Confirm turns the cart's reservations of the given items into a purchase:
+	// it decrements the stock and removes the reservations. It fails without
+	// changing anything with ErrReservationNotFound, ErrReservationExpired or
+	// ErrReservationMismatch. It is idempotent per cart: confirming an already
+	// confirmed cart succeeds and does nothing.
+	Confirm(ctx context.Context, cartID uuid.UUID, items []ConfirmItem) error
 }

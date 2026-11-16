@@ -29,11 +29,12 @@ import (
 type CartCommandService struct {
 	carts    domain.CartRepository
 	products domain.ProductClient
+	orders   domain.OrderClient
 	ttl      time.Duration
 }
 
-func NewCartCommandService(carts domain.CartRepository, products domain.ProductClient, ttl time.Duration) *CartCommandService {
-	return &CartCommandService{carts: carts, products: products, ttl: ttl}
+func NewCartCommandService(carts domain.CartRepository, products domain.ProductClient, orders domain.OrderClient, ttl time.Duration) *CartCommandService {
+	return &CartCommandService{carts: carts, products: products, orders: orders, ttl: ttl}
 }
 
 type OpenCartCommand struct {
@@ -138,6 +139,52 @@ func (s *CartCommandService) RemoveItem(ctx context.Context, cmd RemoveItemComma
 		return domain.Cart{}, err
 	}
 	return s.carts.GetOpenCart(ctx, cmd.UserID)
+}
+
+type CheckoutCommand struct {
+	UserID uuid.UUID
+}
+
+// Checkout turns the user's cart into an order. The cart stays locked for the
+// whole operation, so nothing can be added or removed meanwhile.
+//
+// The steps are: buy the reserved stock in the product service, create the
+// order in the order service, close the cart. A reservation that has expired
+// fails the checkout before anything is bought, and the cart stays as it was.
+// If the order service fails after the stock was bought, the cart stays open
+// and the user simply retries: confirming and creating the order are both
+// idempotent per cart, so nothing is bought or ordered twice.
+func (s *CartCommandService) Checkout(ctx context.Context, cmd CheckoutCommand) (domain.Order, error) {
+	if cmd.UserID == uuid.Nil {
+		return domain.Order{}, fmt.Errorf("%w: user_id is required", domain.ErrInvalidInput)
+	}
+
+	var order domain.Order
+	err := s.carts.Mutate(ctx, cmd.UserID, func(ctx context.Context, tx domain.CartTx) error {
+		items, err := tx.Items(ctx)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return domain.ErrEmptyCart
+		}
+		cart := tx.Cart()
+
+		confirm := make([]domain.ConfirmItem, len(items))
+		for i, it := range items {
+			confirm[i] = domain.ConfirmItem{ProductID: it.ProductID, Quantity: it.Quantity}
+		}
+		if err := s.products.Confirm(ctx, cart.ID, confirm); err != nil {
+			return err
+		}
+
+		order, err = s.orders.CreateOrder(ctx, domain.CreateOrderRequest{UserID: cmd.UserID, CartID: cart.ID, Items: items})
+		if err != nil {
+			return err
+		}
+		return tx.MarkCheckedOut(ctx)
+	})
+	return order, err
 }
 
 // ExpireCarts deletes carts past their expiry and releases their reservations.

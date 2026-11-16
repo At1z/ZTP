@@ -15,6 +15,7 @@ import (
 type cartFixture struct {
 	repo     *fakeCartRepo
 	products *fakeProductClient
+	orders   *fakeOrderClient
 	commands *cartservice.CartCommandService
 	queries  *cartservice.CartQueryService
 }
@@ -22,10 +23,12 @@ type cartFixture struct {
 func newCartFixture() *cartFixture {
 	repo := newFakeCartRepo()
 	products := newFakeProductClient()
+	orders := &fakeOrderClient{}
 	return &cartFixture{
 		repo:     repo,
 		products: products,
-		commands: cartservice.NewCartCommandService(repo, products, 15*time.Minute),
+		orders:   orders,
+		commands: cartservice.NewCartCommandService(repo, products, orders, 15*time.Minute),
 		queries:  cartservice.NewCartQueryService(repo),
 	}
 }
@@ -304,5 +307,143 @@ func TestExpireCartsContinuesWhenReleaseFails(t *testing.T) {
 
 	if err != nil || n != 2 {
 		t.Fatalf("n = %d, err = %v; release failures must not abort the sweep", n, err)
+	}
+}
+
+// fill puts a mug and a shirt into the user's cart.
+func (f *cartFixture) fill(t *testing.T, user uuid.UUID) (mug, shirt uuid.UUID) {
+	t.Helper()
+	mug = f.products.addProduct("Kubek", 2450, 10)
+	shirt = f.products.addProduct("Koszulka", 5990, 10)
+	for _, cmd := range []cartservice.AddItemCommand{
+		{UserID: user, ProductID: mug, Quantity: 2},
+		{UserID: user, ProductID: shirt, Quantity: 1},
+	} {
+		if _, err := f.commands.AddItem(context.Background(), cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return mug, shirt
+}
+
+func TestCheckoutBuysTheItemsAndCreatesTheOrder(t *testing.T) {
+	f := newCartFixture()
+	user := f.userWithCart(t)
+	mug, shirt := f.fill(t, user)
+	cart, _ := f.queries.GetCart(context.Background(), cartservice.GetCartQuery{UserID: user})
+
+	order, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: user})
+
+	if err != nil || order.ID == uuid.Nil {
+		t.Fatalf("order = %+v, err = %v", order, err)
+	}
+	if len(f.products.confirmed) != 1 || len(f.products.confirmed[0]) != 2 {
+		t.Fatalf("confirmed = %+v, want both lines", f.products.confirmed)
+	}
+	req := f.orders.requests[0]
+	if req.UserID != user || req.CartID != cart.ID || len(req.Items) != 2 {
+		t.Fatalf("order request = %+v", req)
+	}
+	quantities := map[uuid.UUID]int{}
+	for _, it := range req.Items {
+		quantities[it.ProductID] = it.Quantity
+	}
+	if quantities[mug] != 2 || quantities[shirt] != 1 {
+		t.Fatalf("ordered quantities = %v", quantities)
+	}
+}
+
+func TestCheckoutClosesTheCart(t *testing.T) {
+	f := newCartFixture()
+	user := f.userWithCart(t)
+	f.fill(t, user)
+
+	if _, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: user}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.queries.GetCart(context.Background(), cartservice.GetCartQuery{UserID: user}); !errors.Is(err, cartdomain.ErrCartNotFound) {
+		t.Fatalf("err = %v, want the checked-out cart to be gone", err)
+	}
+	// A new cart can be opened right away.
+	if _, created, err := f.commands.OpenCart(context.Background(), cartservice.OpenCartCommand{UserID: user}); err != nil || !created {
+		t.Fatalf("created = %v, err = %v", created, err)
+	}
+}
+
+func TestCheckoutOfEmptyCartFails(t *testing.T) {
+	f := newCartFixture()
+	user := f.userWithCart(t)
+
+	_, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: user})
+
+	if !errors.Is(err, cartdomain.ErrEmptyCart) {
+		t.Fatalf("err = %v, want ErrEmptyCart", err)
+	}
+	if len(f.products.confirmed) != 0 || len(f.orders.requests) != 0 {
+		t.Fatal("nothing may be bought or ordered for an empty cart")
+	}
+}
+
+func TestCheckoutWithoutCartFails(t *testing.T) {
+	f := newCartFixture()
+
+	_, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: uuid.New()})
+
+	if !errors.Is(err, cartdomain.ErrCartNotFound) {
+		t.Fatalf("err = %v, want ErrCartNotFound", err)
+	}
+}
+
+func TestCheckoutAfterReservationExpiredCreatesNoOrder(t *testing.T) {
+	f := newCartFixture()
+	user := f.userWithCart(t)
+	f.fill(t, user)
+	f.products.confirmErr = cartdomain.ErrReservationExpired
+
+	_, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: user})
+
+	if !errors.Is(err, cartdomain.ErrReservationExpired) {
+		t.Fatalf("err = %v, want ErrReservationExpired", err)
+	}
+	if len(f.orders.requests) != 0 {
+		t.Fatal("no order may be created when the reservation expired")
+	}
+	cart, err := f.queries.GetCart(context.Background(), cartservice.GetCartQuery{UserID: user})
+	if err != nil || len(cart.Items) != 2 {
+		t.Fatalf("cart = %+v, err = %v; it must stay untouched", cart, err)
+	}
+}
+
+// The order service fails after the stock was bought: the cart stays open, so
+// the checkout can be retried (the product and order calls are idempotent).
+func TestCheckoutKeepsCartOpenWhenOrderServiceFails(t *testing.T) {
+	f := newCartFixture()
+	user := f.userWithCart(t)
+	f.fill(t, user)
+	f.orders.err = cartdomain.ErrOrderServiceUnavailable
+
+	_, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: user})
+	if !errors.Is(err, cartdomain.ErrOrderServiceUnavailable) {
+		t.Fatalf("err = %v, want ErrOrderServiceUnavailable", err)
+	}
+	cart, err := f.queries.GetCart(context.Background(), cartservice.GetCartQuery{UserID: user})
+	if err != nil || len(cart.Items) != 2 {
+		t.Fatalf("cart = %+v, err = %v; it must stay open", cart, err)
+	}
+
+	f.orders.err = nil
+	if _, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{UserID: user}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
+func TestCheckoutRequiresUser(t *testing.T) {
+	f := newCartFixture()
+
+	_, err := f.commands.Checkout(context.Background(), cartservice.CheckoutCommand{})
+
+	if !errors.Is(err, cartdomain.ErrInvalidInput) {
+		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 }

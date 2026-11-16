@@ -32,3 +32,10 @@ type ReserveParams struct {
 	Quantity  int
 	TTL       time.Duration
 }
+
+// ConfirmItem is one line of the purchase: the reservation of the cart for this
+// product must exist, be active and have exactly this quantity.
+type ConfirmItem struct {
+	ProductID uuid.UUID
+	Quantity  int
+}
