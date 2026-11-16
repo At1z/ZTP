@@ -47,5 +47,34 @@ services:
       timeout: 3s
       retries: 10
 
+  cart:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        APP: cart
+    container_name: lab3-cart
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      SERVICE_DB: carts
+      PRODUCT_SERVICE_URL: http://product:8081
+      CART_TTL: ${CART_TTL:-15m}
+    ports:
+      - "${CART_PORT:-8082}:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      product:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   pgdata:

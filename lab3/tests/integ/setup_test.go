@@ -30,9 +30,10 @@ type env struct {
 	router       http.Handler
 }
 
-// newEnv creates a temporary database, so tests never touch each other's data
-// or the development database. It is dropped when the test ends.
-func newEnv(t *testing.T, ttl time.Duration) *env {
+// newDatabase creates a temporary database with the migrations of one service
+// applied, so tests never touch each other's data or the development database.
+// It is dropped when the test ends.
+func newDatabase(t *testing.T, service string) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 
@@ -42,13 +43,12 @@ func newEnv(t *testing.T, ttl time.Duration) *env {
 	}
 	t.Cleanup(admin.Close)
 
-	name := "products_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	name := service + "_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatalf("create database: %v", err)
 	}
 
-	url := config.Load(name, "").DatabaseURL
-	pool, err := db.Connect(ctx, url)
+	pool, err := db.Connect(ctx, config.Load(name, "").DatabaseURL)
 	if err != nil {
 		t.Fatalf("connect to test database: %v", err)
 	}
@@ -59,7 +59,14 @@ func newEnv(t *testing.T, ttl time.Duration) *env {
 		}
 	})
 
-	applyMigrations(t, pool)
+	applyMigrations(t, pool, service)
+	return pool
+}
+
+// newEnv is the product service on a fresh database, wired like cmd/product.
+func newEnv(t *testing.T, ttl time.Duration) *env {
+	t.Helper()
+	pool := newDatabase(t, "product")
 
 	products := repository.NewProductRepository(pool)
 	reservations := repository.NewReservationRepository(pool)
@@ -73,9 +80,9 @@ func newEnv(t *testing.T, ttl time.Duration) *env {
 	return e
 }
 
-func applyMigrations(t *testing.T, pool *pgxpool.Pool) {
+func applyMigrations(t *testing.T, pool *pgxpool.Pool, service string) {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join("..", "..", "migrations", "product", "*.sql"))
+	files, err := filepath.Glob(filepath.Join("..", "..", "migrations", service, "*.sql"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("find migrations: %v", err)
 	}

@@ -28,6 +28,11 @@ func Load(defaultDB, defaultAddr string) Config {
 	}
 }
 
+// String reads a string setting from the environment.
+func String(key, fallback string) string {
+	return getenv(key, fallback)
+}
+
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

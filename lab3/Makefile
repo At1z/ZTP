@@ -1,4 +1,4 @@
-.PHONY: up down reset run-product app-up app-down test test-unit test-integ
+.PHONY: up down reset run-product run-cart app-up app-down test test-unit test-integ
 
 # Infrastructure only (PostgreSQL with the products, carts and orders databases).
 up:
@@ -15,19 +15,23 @@ reset:
 run-product:
 	go run ./cmd/product
 
+# Cart service on the host (needs `make up` and `make run-product`).
+run-cart:
+	go run ./cmd/cart
+
 # Everything in containers.
 app-up:
 	docker compose --profile app up -d --build --wait
 
 app-down:
-	docker compose --profile app stop product
+	docker compose --profile app stop cart product
 
 # Unit tests use in-memory fakes and need no services.
 test-unit:
 	go test -count=1 ./tests/unit/...
 
 # Integration tests need PostgreSQL from `make up`. Each test creates and drops
-# its own temporary database.
+# its own temporary databases.
 test-integ:
 	go test -count=1 -v ./tests/integ/...
 
