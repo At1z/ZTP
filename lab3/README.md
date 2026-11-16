@@ -1,39 +1,45 @@
 # Lab 3: koszyk zakupowy z blokadą produktów
 
-Trzy małe serwisy w Go (`product`, `cart`, `order`) i PostgreSQL. Użytkownik tworzy koszyk, dodaje produkty (które zostają zablokowane dla innych na 15 minut), a na końcu zatwierdza koszyk i dostaje zamówienie z powiadomieniem.
+Trzy małe serwisy w Go (`product`, `cart`, `order`), PostgreSQL i prosty sklep w HTML/CSS/JS. Użytkownik tworzy koszyk, dodaje produkty (które zostają zablokowane dla innych na 15 minut), a na końcu zatwierdza koszyk i dostaje zamówienie z powiadomieniem.
 
 ## 1. Jak to działa w skrócie
 
 ### Połączenia
 
+Przeglądarka rozmawia z jednym adresem. Nginx w kontenerze `frontend` serwuje strony i przekazuje `/api/...` do serwisów:
+
 ```text
-  klient (curl / przeglądarka)
-  nagłówek  X-User-ID: <uuid>
-            │
-            ▼
-   ┌─────────────────┐   HTTP: produkt, rezerwacja,    ┌─────────────────┐
-   │  cart   :8082   │ ──────  zwolnienie, zakup ────► │ product  :8081  │
-   │  koszyki        │                                 │ katalog, stany, │
-   │                 │                                 │ blokady         │
-   └────────┬────────┘                                 └────────┬────────┘
-            │ HTTP: utwórz zamówienie                           │
-            ▼                                                   │
-   ┌─────────────────┐                                          │
-   │  order  :8083   │                                          │
-   │  zamówienia,    │                                          │
-   │  powiadomienia  │                                          │
-   └────────┬────────┘                                          │
-            │                                                   │
-            ▼                  ┌─────────────────────────────┐  ▼
-        baza `orders`          │  PostgreSQL :5432 (jeden    │  baza `products`
-                               │  kontener, trzy bazy;       │
-        baza `carts` ◄──────── │  każdy serwis ma własną)    │
-                               └─────────────────────────────┘
+  przeglądarka ──►  frontend :8080 (nginx)
+  nagłówek                │  /api/cart ─────────────────────►  cart    :8082
+  X-User-ID: <uuid>       │  /api/products ─────────────────►  product :8081
+                          │  /api/orders, /api/notifications ►  order   :8083
+```
+
+Serwisy rozmawiają między sobą przez HTTP, a każdy ma własną bazę:
+
+```text
+   ┌─────────────────┐  produkt, rezerwacja, zwolnienie, zakup  ┌─────────────────┐
+   │  cart   :8082   │ ───────────────────────────────────────► │ product  :8081  │
+   │  koszyki,       │                                          │ katalog, stany, │
+   │  checkout       │                                          │ blokady         │
+   └───────┬─────────┘                                          └────────┬────────┘
+           │ utwórz zamówienie                                           │
+           ▼                                                             │
+   ┌─────────────────┐                                                   │
+   │  order  :8083   │                                                   │
+   │  zamówienia,    │                                                   │
+   │  powiadomienia  │                                                   │
+   └───────┬─────────┘                                                   │
+           │               ┌───────────────────────────────┐             │
+           └────────────►  │ PostgreSQL :5432, trzy bazy:  │  ◄──────────┘
+        cart ────────────► │ `carts`, `orders`, `products` │
+                           └───────────────────────────────┘
 ```
 
 - Serwisy rozmawiają ze sobą **wyłącznie przez HTTP**. Żaden nie sięga do bazy innego.
 - Użytkownik to **UUID w nagłówku `X-User-ID`**. Nie ma logowania ani sesji.
-- Klient rozmawia z `product` (przeglądanie katalogu), z `cart` (koszyk i checkout) oraz z `order` (podgląd zamówień i powiadomień).
+- Wewnętrzne endpointy rezerwacji `product` nie są wystawione przez nginx na zewnątrz.
+- Bez przeglądarki można rozmawiać z serwisami bezpośrednio (`curl` na porty 8081, 8082, 8083).
 
 ### Typowy przebieg zakupu
 
@@ -54,11 +60,14 @@ Potrzebny jest tylko Docker (Go ani PostgreSQL lokalnie nie są wymagane).
 
 ```bash
 cp .env.example .env
-make app-up          # buduje i uruchamia postgres + product + cart + order
+make app-up          # buduje i uruchamia postgres + product + cart + order + frontend
 ```
 
-| Serwis | Adres |
+Potem otwórz **http://localhost:8080**.
+
+| Kontener | Adres |
 |---|---|
+| frontend (sklep) | http://localhost:8080 |
 | product | http://localhost:8081 |
 | cart | http://localhost:8082 |
 | order | http://localhost:8083 |
@@ -78,6 +87,21 @@ Inne komendy:
 | `make test-unit` / `make test-integ` / `make test` | testy |
 
 Migracje wykonują się tylko przy pierwszym starcie pustego wolumenu. Po zmianie migracji zrób `make reset`.
+
+### Frontend
+
+Prosty sklep w czystym HTML, CSS i JavaScript (bez frameworków), katalog `frontend/`, serwowany przez nginx:
+
+| Strona | Co robi |
+|---|---|
+| `index.html` | lista produktów ze stanem i przyciskiem "Do koszyka" |
+| `product.html?id=...` | szczegóły produktu, wybór ilości |
+| `cart.html` | pozycje, suma, **odliczanie do wygaśnięcia rezerwacji** (wg czasu serwera), usuwanie, złożenie zamówienia |
+| `orders.html` | powiadomienia o zamówieniach i ich szczegóły |
+
+- Identyfikator użytkownika (UUID) jest generowany przy pierwszej wizycie i trzymany w `localStorage`, a każde żądanie niesie go w `X-User-ID`.
+- Przycisk **"Zmień"** w nagłówku pozwala wkleić inny UUID. Dzięki temu test blokady da się zrobić w dwóch kartach: w jednej wklej UUID drugiego użytkownika.
+- Odliczanie jest tylko informacją. O wygaśnięciu decyduje serwer.
 
 ### Szybki test ręczny
 
@@ -99,7 +123,7 @@ curl -s localhost:8083/notifications -H "X-User-ID: $U"            # powiadomien
 | Zmienna | Znaczenie | Domyślnie |
 |---|---|---|
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | dostęp do PostgreSQL | `lab3` |
-| `PRODUCT_PORT` / `CART_PORT` / `ORDER_PORT` | porty serwisów na hoście | 8081 / 8082 / 8083 |
+| `FRONTEND_PORT` / `PRODUCT_PORT` / `CART_PORT` / `ORDER_PORT` | porty na hoście | 8080 / 8081 / 8082 / 8083 |
 | `RESERVATION_TTL` | jak długo produkt jest zablokowany | `15m` |
 | `CART_TTL` | jak długo żyje koszyk | `15m` |
 
@@ -287,4 +311,4 @@ CI (`.github/workflows/ci-lab3.yml`) uruchamia gofmt, `go vet`, walidację compo
 
 ## 7. Poza zakresem
 
-Rejestracja, logowanie, sesje i cookies, prawdziwa płatność, broker wiadomości, frontend. Dalszy przebieg realizacji zamówienia (status poza `processing`) też nie jest zaimplementowany.
+Rejestracja, logowanie, sesje i cookies, prawdziwa płatność, broker wiadomości, testy automatyczne frontendu. Dalszy przebieg realizacji zamówienia (status poza `processing`) też nie jest zaimplementowany.

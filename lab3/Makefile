@@ -23,12 +23,12 @@ run-cart:
 run-order:
 	go run ./cmd/order
 
-# Everything in containers.
+# Everything in containers, the shop is then at http://localhost:8080.
 app-up:
 	docker compose --profile app up -d --build --wait
 
 app-down:
-	docker compose --profile app stop cart order product
+	docker compose --profile app stop frontend cart order product
 
 # Unit tests use in-memory fakes and need no services.
 test-unit:

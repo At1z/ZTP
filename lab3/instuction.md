@@ -18,7 +18,7 @@ Użytkownik może:
 
 - **Bez rejestracji, logowania, sesji i cookies.** PDF wymaga tylko unikalnego identyfikatora użytkownika.
 - **Użytkownik = UUID** przesyłany w nagłówku `X-User-ID`. Frontend generuje go przy pierwszej wizycie (`crypto.randomUUID()`) i trzyma w `localStorage`. Brak prawdziwego uwierzytelniania — w produkcji rolę przejąłby token (np. JWT); odnotować w README.
-- **Frontend (HTML/CSS/JS) jest opcjonalny**, robimy go na końcu, jeśli zostanie czas. Priorytet: backend, współbieżność, testy.
+- **Frontend (HTML/CSS/JS)** to cztery proste strony (produkty, produkt, koszyk, zamówienia) serwowane przez nginx w osobnym kontenerze, który robi też proxy `/api/...` do serwisów. Wejście: `http://localhost:8080`.
 - Bez Redisa i brokera wiadomości. Wszystko na PostgreSQL i HTTP.
 
 ## 3. Stos technologiczny
