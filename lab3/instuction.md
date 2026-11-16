@@ -55,26 +55,26 @@ Użytkownik może:
 cmd/<serwis>/main.go          # składanie zależności, start serwera
 internal/<serwis>/
 ├── domain/                   # encje, błędy domenowe, interfejsy repozytoriów/klientów
-├── usecase/                  # komendy, zapytania i ich handlery (logika aplikacji)
+├── service/                  # logika aplikacji: komendy, zapytania i walidacja (Use Case'y)
 ├── repository/               # implementacja interfejsów w PostgreSQL (pgx)
 ├── client/                   # klienci HTTP do innych serwisów (tylko cart)
-└── transport/http/           # handlery HTTP, routing, DTO, mapowanie błędów na statusy
+└── handler/                  # HTTP: routing, DTO, mapowanie błędów na statusy
 internal/platform/            # wspólne: config, db (połączenie), httpx (odpowiedzi JSON)
 migrations/<serwis>/          # pliki SQL
 ```
 
-Zależności idą do środka: `transport` → `usecase` → `domain` ← `repository`/`client`.
+Przepływ: **handler → service → repository**. Zależności idą do środka: `handler` → `service` → `domain` ← `repository`/`client` (service zna tylko interfejsy z `domain`).
 
 ### 4.3 CQRS
 
-Każda operacja zmieniająca stan to **komenda**, każdy odczyt to **zapytanie**. Każda ma osobny typ wejścia i handler (Use Case).
+Każda operacja zmieniająca stan to **komenda**, każdy odczyt to **zapytanie**. Każda ma osobny typ wejścia (`...Command`, `...Query`) i metodę w serwisie (Use Case): serwis zapisów (komendy) i serwis odczytów (zapytania).
 
 - Komendy: `CreateCart`, `AddItem`, `RemoveItem`, `Checkout`, `ExpireCarts` (job), `ReserveProduct`, `ReleaseReservation`, `CreateOrder`.
 - Zapytania: `GetCart`, `GetProduct`, `ListProducts`, `GetNotifications`.
 
 ### 4.4 Testowalność i jakość kodu
 
-- Use Case'y zależą od interfejsów (repozytoria, klient HTTP, zegar), więc testy jednostkowe używają fake'ów, **bez serwera i bez bazy**.
+- Serwisy zależą od interfejsów (repozytoria, klient HTTP, zegar), więc testy jednostkowe używają fake'ów, **bez serwera i bez bazy**.
 - Testy integracyjne na prawdziwym PostgreSQL (osobna baza testowa).
 - Zasady SOLID, DRY, KISS. Brak powtórzeń (wspólne helpery w `platform`), brak zbędnych abstrakcji.
 

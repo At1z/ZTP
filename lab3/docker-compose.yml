@@ -19,5 +19,33 @@ services:
       timeout: 3s
       retries: 10
 
+  # Application services start only with `--profile app` (make app-up), so that
+  # `make up` + `make run-product` can be used for local development.
+  product:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        APP: product
+    container_name: lab3-product
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      SERVICE_DB: products
+      RESERVATION_TTL: ${RESERVATION_TTL:-15m}
+    ports:
+      - "${PRODUCT_PORT:-8081}:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   pgdata:
