@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jaka będzie pogoda?</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; background: #f3f4f6; align-items: center; }
+  #map { height: calc(100% - 52px); }
+  select { padding: 4px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <label>Model <select id="model"></select></label>
+  <label>Członek <select id="member"></select></label>
+  <label>Krok <select id="step"></select></label>
+  <label>Parametr <select id="param"></select></label>
+  <span id="info"></span>
+</div>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const map = L.map("map").setView([52.1, 19.4], 6);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap" }).addTo(map);
+let overlay = null, meta = null;
+
+const fill = (sel, items, fmt = x => x) => { $(sel).innerHTML = items.map(i => `<option value="${i}">${fmt(i)}</option>`).join(""); };
+
+async function loadModel() {
+  meta = await (await fetch(`/api/${$("model").value}`)).json();
+  fill("member", meta.members);
+  fill("step", meta.steps, s => s.replace("T", " ").slice(0, 16));
+  fill("param", meta.params);
+  $("info").textContent = `init: ${meta.timestamp_init.replace("T", " ")} UTC`;
+  draw();
+}
+
+function draw() {
+  const b = meta.bbox;
+  const q = new URLSearchParams({ member: $("member").value, step: $("step").value, param: $("param").value });
+  if (overlay) map.removeLayer(overlay);
+  overlay = L.imageOverlay(`/api/${$("model").value}/png?${q}`, [[b.lat_min, b.lon_min], [b.lat_max, b.lon_max]], { opacity: 0.85 }).addTo(map);
+}
+
+(async () => {
+  fill("model", await (await fetch("/api/models")).json());
+  ["model"].forEach(id => $(id).addEventListener("change", loadModel));
+  ["member", "step", "param"].forEach(id => $(id).addEventListener("change", draw));
+  loadModel();
+})();
+</script>
+</body>
+</html>
