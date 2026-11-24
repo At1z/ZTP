@@ -1,6 +1,7 @@
 """Źródła prognoz: pliki GRIB pobrane przez scripts/fetch_data.py. GFS i IFS różnią się tylko wzorcem plików (DRY)."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -16,13 +17,25 @@ class ForecastSource(Protocol):
     def load(self) -> Forecast: ...
 
 
+_RUN = re.compile(r"_(\d{10})_f\d+\.grib2$")
+
+
+def latest_run(paths: list[Path]) -> list[Path]:
+    """Zostawia pliki tylko z najnowszego przebiegu (YYYYMMDDHH w nazwie), żeby nie mieszać prognoz."""
+    runs = {p: m.group(1) for p in paths if (m := _RUN.search(p.name))}
+    if not runs:
+        return paths
+    newest = max(runs.values())
+    return [p for p, run in runs.items() if run == newest]
+
+
 class GribFilesSource:
     def __init__(self, name: str, pattern: str, reader: GribReader | None = None, data_dir: Path = DATA_DIR):
         self.name, self._pattern, self._dir = name, pattern, data_dir
         self._reader = reader or GribReader()
 
     def load(self) -> Forecast:
-        paths = list(self._dir.glob(self._pattern))
+        paths = latest_run(list(self._dir.glob(self._pattern)))
         if not paths:
             raise FileNotFoundError(f"brak plików {self._pattern} w {self._dir} (uruchom scripts/fetch_data.py)")
         return self._reader.read(self.name, paths)
