@@ -1,0 +1,6 @@
+.venv/
+.eccodes/
+.build/
+data/
+__pycache__/
+*.pyc

@@ -1,0 +1,30 @@
+name: CI lab4
+
+on:
+  push:
+    paths: ["lab4/**", ".github/workflows/ci-lab4.yml"]
+  pull_request:
+    paths: ["lab4/**", ".github/workflows/ci-lab4.yml"]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: lab4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build ecCodes (Linux)
+        if: runner.os == 'Linux'
+        run: ./scripts/build_eccodes.sh
+      - name: Build ecCodes (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build_eccodes.ps1
+      - run: uv sync
+      - run: uv run pytest -q
